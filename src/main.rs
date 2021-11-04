@@ -1,30 +1,26 @@
-// use std::sync::mpsc;
-// use std::sync::mpsc::{Receiver, Sender};
-use std::{future::Future, io::Write, thread, time::{Duration, Instant}};
-use tokio::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
+use std::{thread, time::{Duration, Instant}};
 
-#[derive(PartialEq, PartialOrd)]
+#[derive(PartialEq, PartialOrd, Clone, Copy)]
 enum State {
     Pause,
     Resume,
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
     let mut total = Duration::new(0, 0);
-    let state = State::Resume;
+    let state = Arc::new(Mutex::new(State::Resume));
 
-    alarm(Instant::now(), state, &mut total).await;
+    alarm(Instant::now(), state, &mut total);
 }
 
-async fn alarm(start: Instant, mut state: State, total: &mut Duration) -> Box<dyn Future<Output = ()>> {
-    let (tx, mut rx): (Sender<State>, Receiver<State>) = mpsc::channel(1);
-
-    let j = thread::spawn(move || async {
-        let thread_tx = tx;
-
+fn alarm(start: Instant, state: Arc<Mutex<State>>, total: &mut Duration) {
+    // Not sure why we clone this sht, checkout https://aeshirey.github.io/code/2020/12/23/arc-mutex-in-rust.html
+    // Still have no idea what `Arc` and `Mutex` do on their own
+    let thread_arc = state.clone();
+    let j = thread::spawn(move || {
         let mut t = String::new();
-        println!("spawned thread");
+        println!(" : (from thread 1)");
         let stdin = std::io::stdin();
         stdin.lock();
         stdin.read_line(&mut t).unwrap();
@@ -37,7 +33,7 @@ async fn alarm(start: Instant, mut state: State, total: &mut Duration) -> Box<dy
             _ => State::Resume,
         };
 
-        thread_tx.send(t_state).await
+        *thread_arc.lock().unwrap() = t_state;
     });
 
     // Sleep for 1s
@@ -45,9 +41,7 @@ async fn alarm(start: Instant, mut state: State, total: &mut Duration) -> Box<dy
 
     // println!("123");
     // Add elapsed to total
-    let state = rx.try_recv().unwrap();
-
-    if state == State::Resume {
+    if *state.lock().unwrap() == State::Resume {
         *total += start.elapsed();
     }
 
@@ -60,6 +54,6 @@ async fn alarm(start: Instant, mut state: State, total: &mut Duration) -> Box<dy
     print!("\r{:02}:{:02}:{:02}", hours, minutes, seconds);
 
     // Then recursively call self with neew instant
-    return alarm(Instant::now(), state, total).await;
-    // j.join().unwrap();
+    alarm(Instant::now(), state, total);
+    j.join().unwrap();
 }
